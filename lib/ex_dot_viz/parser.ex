@@ -1,0 +1,196 @@
+defmodule ExDotViz.Parser do
+  @moduledoc """
+  Parses Elixir source files into a normalized intermediate representation.
+
+  Each file is parsed into a list of module forms, capturing:
+
+    * module name
+    * defining file
+    * function definitions (name/arity)
+    * call sites (local and remote)
+    * simple alias/import/use references for dependency analysis
+  """
+
+  @type path :: Path.t()
+
+  @type fun_sig :: %{name: atom(), arity: non_neg_integer()}
+
+  @type call_site :: %{
+          kind: :local | :remote,
+          from: {atom(), atom(), non_neg_integer()},
+          to: {atom(), atom(), non_neg_integer() | :unknown}
+        }
+
+  @type ref :: %{
+          kind: :alias | :import | :use,
+          target: atom()
+        }
+
+  @type module_form :: %{
+          name: atom(),
+          file: path(),
+          functions: [fun_sig()],
+          calls: [call_site()],
+          refs: [ref()]
+        }
+
+  @spec parse_files([path()]) :: [module_form()]
+  def parse_files(files) do
+    Enum.flat_map(files, &parse_file/1)
+  end
+
+  @spec parse_file(path()) :: [module_form()]
+  def parse_file(file) do
+    case File.read(file) do
+      {:ok, source} ->
+        parse_string(source, file)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  @spec parse_string(String.t(), path()) :: [module_form()]
+  def parse_string(source, file) do
+    case Code.string_to_quoted(source, file: file) do
+      {:ok, ast} ->
+        extract_modules(ast, file)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp extract_modules({:__block__, _, forms}, file) do
+    forms
+    |> Enum.flat_map(&extract_modules(&1, file))
+  end
+
+  defp extract_modules({:defmodule, _, [mod_ast, [do: body]]}, file) do
+    name = module_name(mod_ast)
+
+    acc =
+      walk_body(body, name, %{
+        functions: MapSet.new(),
+        calls: [],
+        refs: []
+      })
+
+    funs = acc.functions
+    calls = acc.calls
+    refs = acc.refs
+
+    [
+      %{
+        name: name,
+        file: file,
+        functions:
+          funs
+          |> Enum.map(fn {fun, arity} -> %{name: fun, arity: arity} end)
+          |> Enum.sort_by(&{&1.name, &1.arity}),
+        calls: Enum.reverse(calls),
+        refs: Enum.reverse(refs)
+      }
+    ]
+  end
+
+  defp extract_modules(_other, _file), do: []
+
+  defp module_name({:__aliases__, _, parts}), do: Module.concat(parts)
+
+  # Handles simple atoms like :foo and tuple AST nodes like {:foo, meta, args}
+  defp module_name({name, _, _}) when is_atom(name), do: name
+
+  defp module_name(atom) when is_atom(atom), do: atom
+
+  # Fallback for unexpected shapes – return a sentinel so callers can choose to ignore it.
+  defp module_name(_other), do: :unknown
+
+  defp walk_body({:__block__, _, forms}, mod, acc) do
+    Enum.reduce(forms, acc, &walk_body(&1, mod, &2))
+  end
+
+  defp walk_body({kind, _, [{name, _, args_ast} = _head, _body]} = node, mod, acc)
+       when kind in [:def, :defp] and is_atom(name) do
+    arity = length(args_ast || [])
+    fun_sig = {name, arity}
+
+    acc =
+      Map.update!(acc, :functions, fn set ->
+        MapSet.put(set, fun_sig)
+      end)
+
+    from = {mod, name, arity}
+
+    {_ignored_node, acc} =
+      Macro.prewalk(node, acc, fn
+        {{:., _, [remote_mod_ast, remote_fun]}, _, call_args} = call, acc2
+        when is_atom(remote_fun) ->
+          remote_mod = module_name(remote_mod_ast)
+          arity2 = length(call_args || [])
+
+          call_site = %{
+            kind: :remote,
+            from: from,
+            to: {remote_mod, remote_fun, arity2}
+          }
+
+          {call,
+           Map.update!(acc2, :calls, fn calls ->
+             [call_site | calls]
+           end)}
+
+        {local_fun, _, call_args} = call, acc2
+        when is_atom(local_fun) and local_fun not in [:def, :defp] ->
+          arity2 = length(call_args || [])
+
+          call_site = %{
+            kind: :local,
+            from: from,
+            to: {mod, local_fun, arity2}
+          }
+
+          {call,
+           Map.update!(acc2, :calls, fn calls ->
+             [call_site | calls]
+           end)}
+
+        {:alias, _, [alias_ast]} = node2, acc2 ->
+          target = module_name(alias_ast)
+
+          ref = %{kind: :alias, target: target}
+
+          {node2,
+           Map.update!(acc2, :refs, fn refs ->
+             [ref | refs]
+           end)}
+
+        {:import, _, [alias_ast | _]} = node2, acc2 ->
+          target = module_name(alias_ast)
+
+          ref = %{kind: :import, target: target}
+
+          {node2,
+           Map.update!(acc2, :refs, fn refs ->
+             [ref | refs]
+           end)}
+
+        {:use, _, [alias_ast | _]} = node2, acc2 ->
+          target = module_name(alias_ast)
+
+          ref = %{kind: :use, target: target}
+
+          {node2,
+           Map.update!(acc2, :refs, fn refs ->
+             [ref | refs]
+           end)}
+
+        other, acc2 ->
+          {other, acc2}
+      end)
+
+    acc
+  end
+
+  defp walk_body(_other, _mod, acc), do: acc
+end

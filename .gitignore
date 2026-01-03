@@ -8,3 +8,19 @@ erl_crash.dump
 *.beam
 /config/*.secret.exs
 .elixir_ls/
+modules.md
+
+# Local/generated outputs
+/output/
+/test_output/
+
+# OS / editor junk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
