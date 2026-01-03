@@ -9,11 +9,6 @@ builds **inter-module dependency graphs** and **call graphs**, and emits them as
 - **Graphviz DOT** (for direct rendering with Graphviz)
 ## ExDotViz
 
-ExDotViz analyzes Elixir projects (or single files) and emits:
-
-- Module dependency graphs
-- Function-level call graphs
-
 Quick setup
 
 ```bash
