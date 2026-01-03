@@ -12,7 +12,7 @@ builds **inter-module dependency graphs** and **call graphs**, and emits them as
 Quick setup
 
 ```bash
-cd ex_dot_viz
+cd ex-dot-viz
 mix deps.get
 mix escript.build
 ```
