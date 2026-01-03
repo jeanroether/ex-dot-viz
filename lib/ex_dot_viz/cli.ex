@@ -15,12 +15,14 @@ defmodule ExDotViz.CLI do
   Options:
     --format/-f json|dot     Output format (default: json)
     --graph/-g modules|calls|module_calls|both  Graph type (default: module_calls)
+    --prune                 Comma-separated module names to omit from DOT output (e.g. base in Stack)
 
   Examples:
     ex_dot_viz /path/to/my_project/lib
     ex_dot_viz /path/to/my_project/lib --format dot --graph modules
     ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls
     ex_dot_viz /path/to/my_project/lib --format json --graph both
+    ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls --prune Absinthe,Absinthe.Phase
 
   The visualizations will be saved to: ./output/
   """
@@ -28,10 +30,12 @@ defmodule ExDotViz.CLI do
   @spec main([String.t()]) :: :ok
   def main(argv) do
     case parse_args(argv) do
-      {:ok, project_path, format, graph} ->
+      {:ok, project_path, format, graph, prune} ->
         result = ExDotViz.analyze(project_path)
         output_dir = File.cwd!() |> Path.join("output")
         File.mkdir_p!(output_dir)
+
+        dot_opts = if prune == [], do: [], else: [prune: prune]
 
         case {format, graph} do
           {:json, :modules} ->
@@ -70,27 +74,36 @@ defmodule ExDotViz.CLI do
 
           {:dot, :module_calls} ->
             dot_output =
-              Dot.module_call_graph(%{
-                modules: result.modules,
-                module_call_edges: result.module_call_edges
-              })
+              Dot.module_call_graph(
+                %{
+                  modules: result.modules,
+                  module_call_edges: result.module_call_edges
+                },
+                dot_opts
+              )
 
             write_output(output_dir, "module_calls.dot", dot_output)
             IO.puts("✓ Saved module_calls.dot")
 
           {:dot, :modules} ->
             dot_output =
-              Dot.module_graph(%{modules: result.modules, module_edges: result.module_edges})
+              Dot.module_graph(
+                %{modules: result.modules, module_edges: result.module_edges},
+                dot_opts
+              )
 
             write_output(output_dir, "modules.dot", dot_output)
             IO.puts("✓ Saved modules.dot")
 
           {:dot, :all} ->
             module_calls_dot =
-              Dot.module_call_graph(%{
-                modules: result.modules,
-                module_call_edges: result.module_call_edges
-              })
+              Dot.module_call_graph(
+                %{
+                  modules: result.modules,
+                  module_call_edges: result.module_call_edges
+                },
+                dot_opts
+              )
 
             calls_dot =
               Dot.call_graph(%{call_nodes: result.call_nodes, call_edges: result.call_edges})
@@ -117,13 +130,14 @@ defmodule ExDotViz.CLI do
   defp parse_args([path | rest]) do
     {opts, _rest, _invalid} =
       OptionParser.parse(rest,
-        strict: [format: :string, graph: :string],
+        strict: [format: :string, graph: :string, prune: :string],
         aliases: [f: :format, g: :graph]
       )
 
     with {:ok, format} <- parse_format(Keyword.get(opts, :format, "json")),
          {:ok, graph} <- parse_graph(Keyword.get(opts, :graph, "both")) do
-      {:ok, path, format, graph}
+      prune = parse_prune(Keyword.get(opts, :prune))
+      {:ok, path, format, graph, prune}
     else
       _ -> :error
     end
@@ -140,4 +154,13 @@ defmodule ExDotViz.CLI do
   defp parse_graph("module_calls"), do: {:ok, :module_calls}
   defp parse_graph("both"), do: {:ok, :all}
   defp parse_graph(_), do: :error
+
+  defp parse_prune(nil), do: []
+
+  defp parse_prune(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
 end

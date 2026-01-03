@@ -3,11 +3,26 @@ defmodule ExDotViz.Dot do
   DOT format renderers for module and call graphs.
   """
 
+  @type dot_opt :: {:prune, [String.t()]}
+
   @doc """
   Render a module dependency graph in DOT format.
   """
-  @spec module_graph(%{modules: [map()], module_edges: [map()]}) :: String.t()
-  def module_graph(%{modules: modules, module_edges: edges}) do
+  @spec module_graph(%{modules: [map()], module_edges: [map()]}, [dot_opt()]) :: String.t()
+  def module_graph(%{modules: modules, module_edges: edges}, opts \\ []) do
+    prune_set = opts |> Keyword.get(:prune, []) |> normalize_prune_list() |> MapSet.new()
+
+    modules =
+      Enum.reject(modules, fn %{name: name} ->
+        MapSet.member?(prune_set, Atom.to_string(name))
+      end)
+
+    edges =
+      Enum.reject(edges, fn %{from: from, to: to} ->
+        MapSet.member?(prune_set, Atom.to_string(from)) or
+          MapSet.member?(prune_set, Atom.to_string(to))
+      end)
+
     nodes =
       Enum.map(modules, fn %{name: name} ->
         id = module_id(name)
@@ -60,8 +75,22 @@ defmodule ExDotViz.Dot do
   @doc """
   Render a module-level call graph in DOT format (aggregated function calls).
   """
-  @spec module_call_graph(%{modules: [map()], module_call_edges: [map()]}) :: String.t()
-  def module_call_graph(%{modules: modules, module_call_edges: edges}) do
+  @spec module_call_graph(%{modules: [map()], module_call_edges: [map()]}, [dot_opt()]) ::
+          String.t()
+  def module_call_graph(%{modules: modules, module_call_edges: edges}, opts \\ []) do
+    prune_set = opts |> Keyword.get(:prune, []) |> normalize_prune_list() |> MapSet.new()
+
+    modules =
+      Enum.reject(modules, fn %{name: name} ->
+        MapSet.member?(prune_set, Atom.to_string(name))
+      end)
+
+    edges =
+      Enum.reject(edges, fn %{from: from, to: to} ->
+        MapSet.member?(prune_set, Atom.to_string(from)) or
+          MapSet.member?(prune_set, Atom.to_string(to))
+      end)
+
     nodes =
       Enum.map(modules, fn %{name: name} ->
         id = module_id(name)
@@ -94,5 +123,14 @@ defmodule ExDotViz.Dot do
     "c_" <>
       (inspect({mod, fun, arity})
        |> String.replace(~r/[^a-zA-Z0-9_]/, "_"))
+  end
+
+  defp normalize_prune_list(items) do
+    items
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(fn item ->
+      if String.starts_with?(item, "Elixir."), do: item, else: "Elixir." <> item
+    end)
   end
 end
