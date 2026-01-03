@@ -61,7 +61,7 @@ defmodule ExDotViz do
   @type analysis_result :: %{
           modules: list(module_node()),
           module_edges: list(module_edge()),
-      module_call_edges: list(module_edge()),
+          module_call_edges: list(module_edge()),
           call_nodes: list(call_node()),
           call_edges: list(call_edge())
         }

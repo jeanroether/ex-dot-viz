@@ -56,4 +56,3 @@ ExDotViz.JSON.encode(result)
 ```
 
 License: see `LICENSE`.
-```elixir

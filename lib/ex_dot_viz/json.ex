@@ -201,7 +201,10 @@ defmodule ExDotViz.JSON do
 
         cond do
           String.starts_with?(rest, ",") ->
-            parse_array_elements(String.trim_leading(String.slice(rest, 1..-1//1)), acc ++ [value])
+            parse_array_elements(
+              String.trim_leading(String.slice(rest, 1..-1//1)),
+              acc ++ [value]
+            )
 
           String.starts_with?(rest, "]") ->
             {Enum.reverse([value | Enum.reverse(acc)]), String.slice(rest, 1..-1//1)}
