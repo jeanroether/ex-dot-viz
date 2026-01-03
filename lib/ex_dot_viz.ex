@@ -72,10 +72,12 @@ defmodule ExDotViz do
   Options:
 
     * `:include_tests` - when `false`, test files (`*_test.exs`) are skipped (default: `false`)
+    * `:internal_only` - when `true`, exclude stdlib/external modules and keep only modules defined in the scanned project (default: `true`)
   """
   @spec analyze(path_arg(), keyword()) :: analysis_result()
   def analyze(path, opts \\ []) do
     include_tests? = Keyword.get(opts, :include_tests, false)
+    internal_only? = Keyword.get(opts, :internal_only, true)
 
     files =
       Scanner.scan(path,
@@ -84,6 +86,6 @@ defmodule ExDotViz do
 
     forms = Parser.parse_files(files)
 
-    Analyzer.build_graphs(forms)
+    Analyzer.build_graphs(forms, internal_only: internal_only?)
   end
 end

@@ -14,10 +14,11 @@ defmodule ExDotViz.CLI do
 
   Options:
     --format/-f json|dot     Output format (default: json)
-    --graph/-g calls|module_calls|both  Graph type (default: module_calls)
+    --graph/-g modules|calls|module_calls|both  Graph type (default: module_calls)
 
   Examples:
     ex_dot_viz /path/to/my_project/lib
+    ex_dot_viz /path/to/my_project/lib --format dot --graph modules
     ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls
     ex_dot_viz /path/to/my_project/lib --format json --graph both
 
@@ -33,8 +34,16 @@ defmodule ExDotViz.CLI do
         File.mkdir_p!(output_dir)
 
         case {format, graph} do
+          {:json, :modules} ->
+            json_output =
+              JSON.encode(%{modules: result.modules, module_edges: result.module_edges})
+
+            write_output(output_dir, "modules.json", json_output)
+            IO.puts("✓ Saved modules.json")
+
           {:json, :all} ->
             json_output = JSON.encode(result)
+
             write_output(output_dir, "graphs.json", json_output)
             IO.puts("✓ Saved graphs.json")
 
@@ -68,6 +77,13 @@ defmodule ExDotViz.CLI do
 
             write_output(output_dir, "module_calls.dot", dot_output)
             IO.puts("✓ Saved module_calls.dot")
+
+          {:dot, :modules} ->
+            dot_output =
+              Dot.module_graph(%{modules: result.modules, module_edges: result.module_edges})
+
+            write_output(output_dir, "modules.dot", dot_output)
+            IO.puts("✓ Saved modules.dot")
 
           {:dot, :all} ->
             module_calls_dot =
@@ -120,6 +136,7 @@ defmodule ExDotViz.CLI do
   defp parse_format(_), do: :error
 
   defp parse_graph("calls"), do: {:ok, :calls}
+  defp parse_graph("modules"), do: {:ok, :modules}
   defp parse_graph("module_calls"), do: {:ok, :module_calls}
   defp parse_graph("both"), do: {:ok, :all}
   defp parse_graph(_), do: :error

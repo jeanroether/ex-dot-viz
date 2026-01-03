@@ -96,21 +96,47 @@ defmodule ExDotViz.Parser do
 
   defp extract_modules(_other, _file), do: []
 
-  defp module_name({:__aliases__, _, parts}), do: Module.concat(parts)
+  defp module_name(ast), do: module_name(ast, :unknown)
+
+  defp module_name({:__aliases__, _, parts}, current_mod) do
+    resolved_parts = Enum.map(parts, &resolve_alias_part(&1, current_mod))
+
+    if Enum.any?(resolved_parts, &(&1 == :unknown)) do
+      :unknown
+    else
+      Module.concat(resolved_parts)
+    end
+  end
+
+  defp module_name({:__MODULE__, _, _}, current_mod) when is_atom(current_mod), do: current_mod
+
+  defp module_name({:unquote, _, [inner]}, current_mod) do
+    resolve_alias_part(inner, current_mod)
+  end
 
   # Handles simple atoms like :foo and tuple AST nodes like {:foo, meta, args}
-  defp module_name({name, _, _}) when is_atom(name), do: name
+  defp module_name({name, _, _}, _current_mod) when is_atom(name), do: name
 
-  defp module_name(atom) when is_atom(atom), do: atom
+  defp module_name(atom, _current_mod) when is_atom(atom), do: atom
 
   # Fallback for unexpected shapes – return a sentinel so callers can choose to ignore it.
-  defp module_name(_other), do: :unknown
+  defp module_name(_other, _current_mod), do: :unknown
+
+  defp resolve_alias_part(part, _current_mod) when is_atom(part), do: part
+
+  defp resolve_alias_part({:__MODULE__, _, _}, current_mod) when is_atom(current_mod),
+    do: current_mod
+
+  defp resolve_alias_part({:unquote, _, [inner]}, current_mod),
+    do: resolve_alias_part(inner, current_mod)
+
+  defp resolve_alias_part(_other, _current_mod), do: :unknown
 
   defp walk_body({:__block__, _, forms}, mod, acc) do
     Enum.reduce(forms, acc, &walk_body(&1, mod, &2))
   end
 
-  defp walk_body({kind, _, [{name, _, args_ast} = _head, _body]} = node, mod, acc)
+  defp walk_body({kind, _, [{name, _, args_ast} = _head, body]}, mod, acc)
        when kind in [:def, :defp] and is_atom(name) do
     arity = length(args_ast || [])
     fun_sig = {name, arity}
@@ -123,10 +149,10 @@ defmodule ExDotViz.Parser do
     from = {mod, name, arity}
 
     {_ignored_node, acc} =
-      Macro.prewalk(node, acc, fn
+      Macro.prewalk(body, acc, fn
         {{:., _, [remote_mod_ast, remote_fun]}, _, call_args} = call, acc2
         when is_atom(remote_fun) ->
-          remote_mod = module_name(remote_mod_ast)
+          remote_mod = module_name(remote_mod_ast, mod)
           arity2 = length(call_args || [])
 
           call_site = %{
@@ -156,7 +182,7 @@ defmodule ExDotViz.Parser do
            end)}
 
         {:alias, _, [alias_ast]} = node2, acc2 ->
-          target = module_name(alias_ast)
+          target = module_name(alias_ast, mod)
 
           ref = %{kind: :alias, target: target}
 
@@ -166,7 +192,7 @@ defmodule ExDotViz.Parser do
            end)}
 
         {:import, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast)
+          target = module_name(alias_ast, mod)
 
           ref = %{kind: :import, target: target}
 
@@ -176,7 +202,7 @@ defmodule ExDotViz.Parser do
            end)}
 
         {:use, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast)
+          target = module_name(alias_ast, mod)
 
           ref = %{kind: :use, target: target}
 

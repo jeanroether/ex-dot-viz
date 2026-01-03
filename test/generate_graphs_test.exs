@@ -5,6 +5,24 @@ defmodule ExDotViz.GenerateGraphsTest do
 
   alias ExDotViz.{Scanner, Parser, JSON, Dot, Analyzer}
 
+  test "parser handles unquote(__MODULE__) inside quoted aliases" do
+    source = """
+    defmodule MyApp.Foo do
+      def bar do
+        quote do
+          alias unquote(__MODULE__).SDL
+        end
+      end
+    end
+    """
+
+    [form] = Parser.parse_string(source, "inline.ex")
+    assert form.name == MyApp.Foo
+
+    # The main requirement: parsing should not crash.
+    assert is_list(form.refs)
+  end
+
   @project_root "lib"
   @output_dir "test_output"
 

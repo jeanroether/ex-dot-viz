@@ -7,9 +7,8 @@ builds **inter-module dependency graphs** and **call graphs**, and emits them as
 
 - **JSON** (for further tooling / custom visualization)
 - **Graphviz DOT** (for direct rendering with Graphviz)
-## ExDotViz
 
-Quick setup
+## Quick setup
 
 ```bash
 cd ex-dot-viz
@@ -19,28 +18,64 @@ mix escript.build
 
 This produces the `ex_dot_viz` escript in the project root.
 
-Basic CLI usage
+## Basic CLI usage
 
 ```bash
-./ex_dot_viz PATH --format json|dot --graph calls|module_calls|both
+./ex_dot_viz PROJECT_PATH [--format json|dot] [--graph calls|module_calls|both]
 ```
 
-Common examples
+Notes:
+
+- Run the command from the ExDotViz tool directory.
+- Output files are written to `./output/` (they are not printed to stdout).
+
+## Visualize another project
+
+Example target project:
+
+`/Users/jean/Code/test_ex/absinthe`
+
+From the ExDotViz directory:
+
+```bash
+# Module-level call graph (recommended starting point)
+./ex_dot_viz path/to/lib --format json --graph module_calls
+./ex_dot_viz path/to/lib --format dot --graph module_calls
+
+# Function-level call graph (can be large)
+./ex_dot_viz path/to/lib --format json --graph calls
+./ex_dot_viz path/to/lib --format dot --graph calls
+```
+
+Generated files (in `./output/`):
+
+- `module_calls.json` and `module_calls.dot`
+- `calls.json` and `calls.dot`
+
+To render a DOT file with Graphviz:
+
+```bash
+dot -Tsvg output/module_calls.dot -o module_calls.svg
+dot -Tpng output/module_calls.dot -o module_calls.png
+```
+
+## Common examples
 
 - Export both graphs as JSON:
 
   ```bash
-  ./ex_dot_viz lib --format json --graph both > graphs.json
+  ./ex_dot_viz lib --format json --graph both
+  # output/graphs.json
   ```
 
 - Generate module dependency DOT and render as PNG:
 
   ```bash
-  ./ex_dot_viz lib --format dot --graph module_calls > module_calls.dot
-  dot -Tpng module_calls.dot -o module_calls.png
+  ./ex_dot_viz lib --format dot --graph module_calls
+  dot -Tpng output/module_calls.dot -o module_calls.png
   ```
 
-Programmatic usage (from an Elixir process)
+## Programmatic usage (from an Elixir process)
 
 ```elixir
 result = ExDotViz.analyze("lib")
