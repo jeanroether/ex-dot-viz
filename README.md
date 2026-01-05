@@ -75,16 +75,6 @@ dot -Tpng output/module_calls.dot -o module_calls.png
   dot -Tpng output/module_calls.dot -o module_calls.png
   ```
 
-## Pruning (DOT-only)
-
-If the generated DOT graphs are too large, you can **prune specific modules by name** when emitting DOT.
-
-- Pruning applies only to DOT output.
-- JSON output is **never pruned**.
-
-The `--prune` option takes a comma-separated list of module names.
-You can pass names with or without the `Elixir.` prefix.
-
 ## Programmatic usage (from an Elixir process)
 
 ```elixir
