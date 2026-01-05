@@ -89,7 +89,7 @@ defmodule ExDotViz.Analyzer do
     module_call_edges =
       graphs.module_call_edges
       |> Enum.filter(fn %{from: from, to: to} ->
-        MapSet.member?(internal_modules, from) and MapSet.member?(internal_modules, to)
+        MapSet.member?(internal_modules, from) and to != :unknown
       end)
 
     call_edges =

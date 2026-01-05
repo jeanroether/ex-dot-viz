@@ -118,8 +118,9 @@ defmodule ExDotViz.Parser do
     resolve_alias_part(inner, current_mod, aliases)
   end
 
-  # Handles simple atoms like :foo and tuple AST nodes like {:foo, meta, args}
-  defp module_name({name, _, _}, _current_mod, _aliases) when is_atom(name), do: name
+  # Do not treat arbitrary tuple AST nodes (often variables) as module names.
+  # If it isn't an alias/module atom, return :unknown and let callers ignore it.
+  defp module_name({_name, _, _}, _current_mod, _aliases), do: :unknown
 
   defp module_name(atom, _current_mod, _aliases) when is_atom(atom), do: atom
 
@@ -243,113 +244,127 @@ defmodule ExDotViz.Parser do
     Map.update!(acc, :refs, fn refs -> [ref | refs] end)
   end
 
-  defp walk_body({kind, _, [{name, _, args_ast} = _head, body]}, mod, acc)
-       when kind in [:def, :defp] and is_atom(name) do
-    arity = length(args_ast || [])
-    fun_sig = {name, arity}
+  defp walk_body({kind, _, [head_ast, body]}, mod, acc)
+       when kind in [:def, :defp, :defmacro, :defmacrop] do
+    case fun_head(head_ast) do
+      {:ok, name, arity} ->
+        fun_sig = {name, arity}
 
-    acc =
-      Map.update!(acc, :functions, fn set ->
-        MapSet.put(set, fun_sig)
-      end)
+        acc =
+          Map.update!(acc, :functions, fn set ->
+            MapSet.put(set, fun_sig)
+          end)
 
-    from = {mod, name, arity}
+        from = {mod, name, arity}
 
-    {_ignored_node, acc} =
-      Macro.prewalk(body, acc, fn
-        {{:., _, [remote_mod_ast, remote_fun]}, _, call_args} = call, acc2
-        when is_atom(remote_fun) ->
-          remote_mod = module_name(remote_mod_ast, mod, acc2.aliases)
-          arity2 = length(call_args || [])
+        {_ignored_node, acc} =
+          Macro.prewalk(body, acc, fn
+            {{:., _, [remote_mod_ast, remote_fun]}, _, call_args} = call, acc2
+            when is_atom(remote_fun) ->
+              remote_mod = module_name(remote_mod_ast, mod, acc2.aliases)
+              arity2 = length(call_args || [])
 
-          call_site = %{
-            kind: :remote,
-            from: from,
-            to: {remote_mod, remote_fun, arity2}
-          }
+              call_site = %{
+                kind: :remote,
+                from: from,
+                to: {remote_mod, remote_fun, arity2}
+              }
 
-          {call,
-           Map.update!(acc2, :calls, fn calls ->
-             [call_site | calls]
-           end)}
+              {call,
+               Map.update!(acc2, :calls, fn calls ->
+                 [call_site | calls]
+               end)}
 
-        {local_fun, _, call_args} = call, acc2
-        when is_atom(local_fun) and local_fun not in [:def, :defp] ->
-          arity2 = length(call_args || [])
+            {local_fun, _, call_args} = call, acc2
+            when is_atom(local_fun) and local_fun not in [:def, :defp] ->
+              arity2 = length(call_args || [])
 
-          call_site = %{
-            kind: :local,
-            from: from,
-            to: {mod, local_fun, arity2}
-          }
+              call_site = %{
+                kind: :local,
+                from: from,
+                to: {mod, local_fun, arity2}
+              }
 
-          {call,
-           Map.update!(acc2, :calls, fn calls ->
-             [call_site | calls]
-           end)}
+              {call,
+               Map.update!(acc2, :calls, fn calls ->
+                 [call_site | calls]
+               end)}
 
-        {:alias, _, [alias_ast]} = node2, acc2 ->
-          target = module_name(alias_ast, mod, acc2.aliases)
+            {:alias, _, [alias_ast]} = node2, acc2 ->
+              target = module_name(alias_ast, mod, acc2.aliases)
 
-          ref = %{kind: :alias, target: target}
+              ref = %{kind: :alias, target: target}
 
-          {node2,
-           acc2
-           |> Map.update!(:refs, fn refs -> [ref | refs] end)
-           |> Map.update!(:aliases, fn aliases ->
-             alias_ast
-             |> alias_pairs(mod)
-             |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
-               Map.put(acc_aliases, short, full)
-             end)
-           end)}
-
-        {:alias, _, [alias_ast, opts]} = node2, acc2 when is_list(opts) ->
-          target = module_name(alias_ast, mod, acc2.aliases)
-
-          {node2,
-           acc2
-           |> Map.update!(:refs, fn refs -> [%{kind: :alias, target: target} | refs] end)
-           |> Map.update!(:aliases, fn aliases ->
-             case Keyword.get(opts, :as) do
-               {:__aliases__, _, [as_name]} when is_atom(as_name) and is_atom(target) ->
-                 Map.put(aliases, as_name, target)
-
-               _ ->
+              {node2,
+               acc2
+               |> Map.update!(:refs, fn refs -> [ref | refs] end)
+               |> Map.update!(:aliases, fn aliases ->
                  alias_ast
                  |> alias_pairs(mod)
                  |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
                    Map.put(acc_aliases, short, full)
                  end)
-             end
-           end)}
+               end)}
 
-        {:import, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast, mod, acc2.aliases)
+            {:alias, _, [alias_ast, opts]} = node2, acc2 when is_list(opts) ->
+              target = module_name(alias_ast, mod, acc2.aliases)
 
-          ref = %{kind: :import, target: target}
+              {node2,
+               acc2
+               |> Map.update!(:refs, fn refs -> [%{kind: :alias, target: target} | refs] end)
+               |> Map.update!(:aliases, fn aliases ->
+                 case Keyword.get(opts, :as) do
+                   {:__aliases__, _, [as_name]} when is_atom(as_name) and is_atom(target) ->
+                     Map.put(aliases, as_name, target)
 
-          {node2,
-           Map.update!(acc2, :refs, fn refs ->
-             [ref | refs]
-           end)}
+                   _ ->
+                     alias_ast
+                     |> alias_pairs(mod)
+                     |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
+                       Map.put(acc_aliases, short, full)
+                     end)
+                 end
+               end)}
 
-        {:use, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast, mod, acc2.aliases)
+            {:import, _, [alias_ast | _]} = node2, acc2 ->
+              target = module_name(alias_ast, mod, acc2.aliases)
 
-          ref = %{kind: :use, target: target}
+              ref = %{kind: :import, target: target}
 
-          {node2,
-           Map.update!(acc2, :refs, fn refs ->
-             [ref | refs]
-           end)}
+              {node2,
+               Map.update!(acc2, :refs, fn refs ->
+                 [ref | refs]
+               end)}
 
-        other, acc2 ->
-          {other, acc2}
-      end)
+            {:use, _, [alias_ast | _]} = node2, acc2 ->
+              target = module_name(alias_ast, mod, acc2.aliases)
 
-    acc
+              ref = %{kind: :use, target: target}
+
+              {node2,
+               Map.update!(acc2, :refs, fn refs ->
+                 [ref | refs]
+               end)}
+
+            other, acc2 ->
+              {other, acc2}
+          end)
+
+        acc
+
+      :skip ->
+        acc
+    end
   end
 
   defp walk_body(_other, _mod, acc), do: acc
+
+  defp fun_head({:when, _, [inner, _guard]}), do: fun_head(inner)
+
+  defp fun_head({name, _, args_ast}) when is_atom(name) do
+    arity = length(args_ast || [])
+    {:ok, name, arity}
+  end
+
+  defp fun_head(_other), do: :skip
 end

@@ -91,8 +91,23 @@ defmodule ExDotViz.Dot do
           MapSet.member?(prune_set, Atom.to_string(to))
       end)
 
+    module_names =
+      modules
+      |> Enum.map(& &1.name)
+      |> MapSet.new()
+
+    edge_names =
+      edges
+      |> Enum.flat_map(fn %{from: from, to: to} -> [from, to] end)
+      |> Enum.reject(&is_nil/1)
+
+    all_names =
+      module_names
+      |> MapSet.union(MapSet.new(edge_names))
+      |> MapSet.to_list()
+
     nodes =
-      Enum.map(modules, fn %{name: name} ->
+      Enum.map(all_names, fn name ->
         id = module_id(name)
         label = Atom.to_string(name)
         ~s(  #{id} [label="#{label}"];)

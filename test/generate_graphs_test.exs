@@ -23,6 +23,42 @@ defmodule ExDotViz.GenerateGraphsTest do
     assert is_list(form.refs)
   end
 
+  test "parser captures remote calls inside guarded function heads" do
+    source = """
+    defmodule MyApp.Foo do
+      alias MyApp.Bar
+
+      def baz(x) when is_integer(x) do
+        Bar.qux(x)
+      end
+    end
+    """
+
+    [form] = Parser.parse_string(source, "inline.ex")
+    assert form.name == MyApp.Foo
+
+    assert Enum.any?(form.calls, fn %{kind: kind, to: {mod, fun, arity}} ->
+             kind == :remote and mod == MyApp.Bar and fun == :qux and arity == 1
+           end)
+  end
+
+  test "internal_only keeps outbound module_calls to external modules" do
+    source = """
+    defmodule MyApp.Foo do
+      def bar(list) do
+        Enum.map(list, & &1)
+      end
+    end
+    """
+
+    forms = Parser.parse_string(source, "inline.ex")
+    graphs = Analyzer.build_graphs(forms, internal_only: true)
+
+    assert Enum.any?(graphs.module_call_edges, fn %{from: from, to: to} ->
+             from == MyApp.Foo and to == Enum
+           end)
+  end
+
   @project_root "lib"
   @output_dir "test_output"
 
