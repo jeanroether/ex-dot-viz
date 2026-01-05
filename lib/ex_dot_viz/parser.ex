@@ -31,7 +31,7 @@ defmodule ExDotViz.Parser do
           file: path(),
           functions: [fun_sig()],
           calls: [call_site()],
-          refs: [ref()]
+      refs: [ref()]
         }
 
   @spec parse_files([path()]) :: [module_form()]
@@ -73,7 +73,8 @@ defmodule ExDotViz.Parser do
       walk_body(body, name, %{
         functions: MapSet.new(),
         calls: [],
-        refs: []
+        refs: [],
+        aliases: %{}
       })
 
     funs = acc.functions
@@ -98,8 +99,10 @@ defmodule ExDotViz.Parser do
 
   defp module_name(ast), do: module_name(ast, :unknown)
 
-  defp module_name({:__aliases__, _, parts}, current_mod) do
-    resolved_parts = Enum.map(parts, &resolve_alias_part(&1, current_mod))
+  defp module_name(ast, current_mod), do: module_name(ast, current_mod, %{})
+
+  defp module_name({:__aliases__, _, parts}, current_mod, aliases) when is_list(parts) do
+    resolved_parts = resolve_alias_parts(parts, current_mod, aliases)
 
     if Enum.any?(resolved_parts, &(&1 == :unknown)) do
       :unknown
@@ -108,32 +111,135 @@ defmodule ExDotViz.Parser do
     end
   end
 
-  defp module_name({:__MODULE__, _, _}, current_mod) when is_atom(current_mod), do: current_mod
+  defp module_name({:__MODULE__, _, _}, current_mod, _aliases) when is_atom(current_mod), do: current_mod
 
-  defp module_name({:unquote, _, [inner]}, current_mod) do
-    resolve_alias_part(inner, current_mod)
+  defp module_name({:unquote, _, [inner]}, current_mod, aliases) do
+    resolve_alias_part(inner, current_mod, aliases)
   end
 
   # Handles simple atoms like :foo and tuple AST nodes like {:foo, meta, args}
-  defp module_name({name, _, _}, _current_mod) when is_atom(name), do: name
+  defp module_name({name, _, _}, _current_mod, _aliases) when is_atom(name), do: name
 
-  defp module_name(atom, _current_mod) when is_atom(atom), do: atom
+  defp module_name(atom, _current_mod, _aliases) when is_atom(atom), do: atom
 
   # Fallback for unexpected shapes – return a sentinel so callers can choose to ignore it.
-  defp module_name(_other, _current_mod), do: :unknown
+  defp module_name(_other, _current_mod, _aliases), do: :unknown
 
-  defp resolve_alias_part(part, _current_mod) when is_atom(part), do: part
+  defp resolve_alias_parts([], _current_mod, _aliases), do: []
 
-  defp resolve_alias_part({:__MODULE__, _, _}, current_mod) when is_atom(current_mod),
+  defp resolve_alias_parts([first | rest], current_mod, aliases) do
+    case resolve_alias_part(first, current_mod, aliases) do
+      :unknown ->
+        [:unknown | Enum.map(rest, &resolve_alias_part(&1, current_mod, aliases))]
+
+      resolved_first ->
+        case Map.fetch(aliases, resolved_first) do
+          {:ok, expanded_mod} ->
+            expanded_parts =
+              expanded_mod
+              |> Module.split()
+              |> Enum.map(&String.to_atom/1)
+
+            expanded_parts ++ Enum.map(rest, &resolve_alias_part(&1, current_mod, aliases))
+
+          :error ->
+            [resolved_first | Enum.map(rest, &resolve_alias_part(&1, current_mod, aliases))]
+        end
+    end
+  end
+
+  defp resolve_alias_part(part, _current_mod, _aliases) when is_atom(part), do: part
+
+  defp resolve_alias_part({:__MODULE__, _, _}, current_mod, _aliases) when is_atom(current_mod),
     do: current_mod
 
-  defp resolve_alias_part({:unquote, _, [inner]}, current_mod),
-    do: resolve_alias_part(inner, current_mod)
+  defp resolve_alias_part({:unquote, _, [inner]}, current_mod, aliases),
+    do: resolve_alias_part(inner, current_mod, aliases)
 
-  defp resolve_alias_part(_other, _current_mod), do: :unknown
+  defp resolve_alias_part(_other, _current_mod, _aliases), do: :unknown
+
+  defp alias_pairs({:__aliases__, _, parts}, _current_mod) when is_list(parts) do
+    full = Module.concat(parts)
+    short = parts |> List.last()
+    [{short, full}]
+  end
+
+  # Handles `alias MyApp.{Foo, Bar}`.
+  defp alias_pairs({{:., _, [base_ast, :{}]}, _, children}, current_mod)
+       when is_list(children) do
+    base_mod = module_name(base_ast, current_mod, %{})
+
+    if base_mod == :unknown do
+      []
+    else
+      base_parts =
+        base_mod
+        |> Module.split()
+        |> Enum.map(&String.to_atom/1)
+
+      Enum.flat_map(children, fn
+        {:__aliases__, _, child_parts} when is_list(child_parts) ->
+          full = Module.concat(base_parts ++ child_parts)
+          short = child_parts |> List.last()
+          [{short, full}]
+
+        _other ->
+          []
+      end)
+    end
+  end
+
+  defp alias_pairs(_other, _current_mod), do: []
 
   defp walk_body({:__block__, _, forms}, mod, acc) do
     Enum.reduce(forms, acc, &walk_body(&1, mod, &2))
+  end
+
+  defp walk_body({:alias, _, [alias_ast]} = _node, mod, acc) do
+    target = module_name(alias_ast, mod, acc.aliases)
+    ref = %{kind: :alias, target: target}
+
+    acc
+    |> Map.update!(:refs, fn refs -> [ref | refs] end)
+    |> Map.update!(:aliases, fn aliases ->
+      alias_ast
+      |> alias_pairs(mod)
+      |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
+        Map.put(acc_aliases, short, full)
+      end)
+    end)
+  end
+
+  defp walk_body({:alias, _, [alias_ast, opts]} = _node, mod, acc) when is_list(opts) do
+    target = module_name(alias_ast, mod, acc.aliases)
+
+    acc
+    |> Map.update!(:refs, fn refs -> [%{kind: :alias, target: target} | refs] end)
+    |> Map.update!(:aliases, fn aliases ->
+      case Keyword.get(opts, :as) do
+        {:__aliases__, _, [as_name]} when is_atom(as_name) and is_atom(target) ->
+          Map.put(aliases, as_name, target)
+
+        _ ->
+          alias_ast
+          |> alias_pairs(mod)
+          |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
+            Map.put(acc_aliases, short, full)
+          end)
+      end
+    end)
+  end
+
+  defp walk_body({:import, _, [alias_ast | _]} = _node, mod, acc) do
+    target = module_name(alias_ast, mod, acc.aliases)
+    ref = %{kind: :import, target: target}
+    Map.update!(acc, :refs, fn refs -> [ref | refs] end)
+  end
+
+  defp walk_body({:use, _, [alias_ast | _]} = _node, mod, acc) do
+    target = module_name(alias_ast, mod, acc.aliases)
+    ref = %{kind: :use, target: target}
+    Map.update!(acc, :refs, fn refs -> [ref | refs] end)
   end
 
   defp walk_body({kind, _, [{name, _, args_ast} = _head, body]}, mod, acc)
@@ -152,7 +258,7 @@ defmodule ExDotViz.Parser do
       Macro.prewalk(body, acc, fn
         {{:., _, [remote_mod_ast, remote_fun]}, _, call_args} = call, acc2
         when is_atom(remote_fun) ->
-          remote_mod = module_name(remote_mod_ast, mod)
+          remote_mod = module_name(remote_mod_ast, mod, acc2.aliases)
           arity2 = length(call_args || [])
 
           call_site = %{
@@ -182,17 +288,43 @@ defmodule ExDotViz.Parser do
            end)}
 
         {:alias, _, [alias_ast]} = node2, acc2 ->
-          target = module_name(alias_ast, mod)
+          target = module_name(alias_ast, mod, acc2.aliases)
 
           ref = %{kind: :alias, target: target}
 
           {node2,
-           Map.update!(acc2, :refs, fn refs ->
-             [ref | refs]
+           acc2
+           |> Map.update!(:refs, fn refs -> [ref | refs] end)
+           |> Map.update!(:aliases, fn aliases ->
+             alias_ast
+             |> alias_pairs(mod)
+             |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
+               Map.put(acc_aliases, short, full)
+             end)
+           end)}
+
+        {:alias, _, [alias_ast, opts]} = node2, acc2 when is_list(opts) ->
+          target = module_name(alias_ast, mod, acc2.aliases)
+
+          {node2,
+           acc2
+           |> Map.update!(:refs, fn refs -> [%{kind: :alias, target: target} | refs] end)
+           |> Map.update!(:aliases, fn aliases ->
+             case Keyword.get(opts, :as) do
+               {:__aliases__, _, [as_name]} when is_atom(as_name) and is_atom(target) ->
+                 Map.put(aliases, as_name, target)
+
+               _ ->
+                 alias_ast
+                 |> alias_pairs(mod)
+                 |> Enum.reduce(aliases, fn {short, full}, acc_aliases ->
+                   Map.put(acc_aliases, short, full)
+                 end)
+             end
            end)}
 
         {:import, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast, mod)
+          target = module_name(alias_ast, mod, acc2.aliases)
 
           ref = %{kind: :import, target: target}
 
@@ -202,7 +334,7 @@ defmodule ExDotViz.Parser do
            end)}
 
         {:use, _, [alias_ast | _]} = node2, acc2 ->
-          target = module_name(alias_ast, mod)
+          target = module_name(alias_ast, mod, acc2.aliases)
 
           ref = %{kind: :use, target: target}
 

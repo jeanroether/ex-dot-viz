@@ -16,6 +16,8 @@ defmodule ExDotViz.CLI do
     --format/-f json|dot     Output format (default: json)
     --graph/-g modules|calls|module_calls|both  Graph type (default: module_calls)
     --prune                 Comma-separated module names to omit from DOT output (e.g. base in Stack)
+    --internal-only         Keep only modules defined in the scanned project (default)
+    --no-internal-only      Include external/stdlib modules in graphs
 
   Examples:
     ex_dot_viz /path/to/my_project/lib
@@ -23,6 +25,7 @@ defmodule ExDotViz.CLI do
     ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls
     ex_dot_viz /path/to/my_project/lib --format json --graph both
     ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls --prune Absinthe,Absinthe.Phase
+    ex_dot_viz /path/to/my_project/lib --format dot --graph module_calls --no-internal-only
 
   The visualizations will be saved to: ./output/
   """
@@ -30,8 +33,8 @@ defmodule ExDotViz.CLI do
   @spec main([String.t()]) :: :ok
   def main(argv) do
     case parse_args(argv) do
-      {:ok, project_path, format, graph, prune} ->
-        result = ExDotViz.analyze(project_path)
+      {:ok, project_path, format, graph, prune, internal_only?} ->
+        result = ExDotViz.analyze(project_path, internal_only: internal_only?)
         output_dir = File.cwd!() |> Path.join("output")
         File.mkdir_p!(output_dir)
 
@@ -130,14 +133,15 @@ defmodule ExDotViz.CLI do
   defp parse_args([path | rest]) do
     {opts, _rest, _invalid} =
       OptionParser.parse(rest,
-        strict: [format: :string, graph: :string, prune: :string],
+        strict: [format: :string, graph: :string, prune: :string, internal_only: :boolean],
         aliases: [f: :format, g: :graph]
       )
 
     with {:ok, format} <- parse_format(Keyword.get(opts, :format, "json")),
          {:ok, graph} <- parse_graph(Keyword.get(opts, :graph, "both")) do
       prune = parse_prune(Keyword.get(opts, :prune))
-      {:ok, path, format, graph, prune}
+      internal_only? = Keyword.get(opts, :internal_only, true)
+      {:ok, path, format, graph, prune, internal_only?}
     else
       _ -> :error
     end
