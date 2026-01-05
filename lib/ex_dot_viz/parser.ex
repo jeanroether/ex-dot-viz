@@ -31,7 +31,7 @@ defmodule ExDotViz.Parser do
           file: path(),
           functions: [fun_sig()],
           calls: [call_site()],
-      refs: [ref()]
+          refs: [ref()]
         }
 
   @spec parse_files([path()]) :: [module_form()]
@@ -111,7 +111,8 @@ defmodule ExDotViz.Parser do
     end
   end
 
-  defp module_name({:__MODULE__, _, _}, current_mod, _aliases) when is_atom(current_mod), do: current_mod
+  defp module_name({:__MODULE__, _, _}, current_mod, _aliases) when is_atom(current_mod),
+    do: current_mod
 
   defp module_name({:unquote, _, [inner]}, current_mod, aliases) do
     resolve_alias_part(inner, current_mod, aliases)
